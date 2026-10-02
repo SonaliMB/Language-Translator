@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Language Translator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="app">
+        <header class="app-header">
+            <h1>Language translator</h1>
+            <p>Choose the languages, enter your text, and translate.</p>
+        </header>
+
+        <div class="lang-bar">
+            <div class="field">
+                <label for="sourceLang">Translate from</label>
+                <select id="sourceLang"></select>
+            </div>
+            <button type="button" id="swapBtn" class="ghost swap" aria-label="Swap languages" title="Swap languages">&#8644;</button>
+            <div class="field">
+                <label for="targetLang">Translate to</label>
+                <select id="targetLang"></select>
+            </div>
+        </div>
+
+        <div class="panes">
+            <section class="pane source-pane" aria-labelledby="inLabel">
+                <div class="pane-head">
+                    <h2 id="inLabel">English</h2>
+                    <span id="charCount" class="meta">0 characters</span>
+                </div>
+                <textarea id="inputText" placeholder="Enter the text you want to translate" rows="9" aria-labelledby="inLabel"></textarea>
+                <div class="actions">
+                    <button type="button" id="translateBtn" class="primary">Translate</button>
+                    <button type="button" id="clearBtn" class="ghost">Clear</button>
+                    <span class="meta hint">Ctrl + Enter to translate</span>
+                </div>
+            </section>
+
+            <section class="pane result-pane" aria-labelledby="outLabel">
+                <div class="pane-head">
+                    <h2 id="outLabel">German</h2>
+                    <button type="button" id="copyBtn" class="ghost small" disabled>Copy</button>
+                </div>
+                <div id="output" class="output empty" aria-live="polite">
+                    Your translation will appear here.
+                </div>
+            </section>
+        </div>
+
+        <p id="status" class="status" role="status" hidden></p>
+    </main>
+
+    <script>
+        // Must match where uvicorn is running: uvicorn fastapi_translator:app --reload
+        const BACKEND_URL = 'http://localhost:8000';
+        const PLACEHOLDER = 'Your translation will appear here.';
+        const AUTO = 'Auto-detect';
+
+        // Keep this list in sync with SUPPORTED_LANGUAGES in fastapi_translator.py
+        const LANGUAGES = [
+            'Arabic', 'Bengali', 'Chinese (Simplified)', 'Chinese (Traditional)', 'Czech',
+            'Dutch', 'English', 'Filipino', 'French', 'German', 'Greek', 'Hebrew', 'Hindi',
+            'Hungarian', 'Indonesian', 'Italian', 'Japanese', 'Korean', 'Malay', 'Marathi',
+            'Persian', 'Polish', 'Portuguese', 'Romanian', 'Russian', 'Spanish', 'Swahili',
+            'Swedish', 'Tamil', 'Telugu', 'Thai', 'Turkish', 'Ukrainian', 'Urdu', 'Vietnamese'
+        ];
+
+        const sourceLang = document.getElementById('sourceLang');
+        const targetLang = document.getElementById('targetLang');
+        const swapBtn = document.getElementById('swapBtn');
+        const inputText = document.getElementById('inputText');
+        const output = document.getElementById('output');
+        const translateBtn = document.getElementById('translateBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const copyBtn = document.getElementById('copyBtn');
+        const charCount = document.getElementById('charCount');
+        const statusEl = document.getElementById('status');
+        const inLabel = document.getElementById('inLabel');
+        const outLabel = document.getElementById('outLabel');
+
+        function fillSelect(select, options, selected) {
+            options.forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                select.appendChild(opt);
+            });
+            select.value = selected;
+        }
+
+        fillSelect(sourceLang, [AUTO, ...LANGUAGES], 'English');
+        fillSelect(targetLang, LANGUAGES, 'German');
+
+        function updateLabels() {
+            inLabel.textContent = sourceLang.value;
+            outLabel.textContent = targetLang.value;
+            swapBtn.disabled = sourceLang.value === AUTO;
+        }
+        updateLabels();
+
+        function showStatus(message, isError = false) {
+            statusEl.textContent = message;
+            statusEl.hidden = !message;
+            statusEl.classList.toggle('error', isError);
+        }
+
+        function setOutput(text, isEmpty = false) {
+            output.textContent = text;
+            output.classList.toggle('empty', isEmpty);
+            copyBtn.disabled = isEmpty;
+        }
+
+        function setLoading(isLoading) {
+            translateBtn.disabled = isLoading;
+            translateBtn.textContent = isLoading ? 'Translating…' : 'Translate';
+            output.classList.toggle('loading', isLoading);
+        }
+
+        async function translate() {
+            const text = inputText.value.trim();
+            if (!text) {
+                showStatus('Enter some text to translate.', true);
+                inputText.focus();
+                return;
+            }
+            if (sourceLang.value === targetLang.value) {
+                showStatus('Choose two different languages.', true);
+                return;
+            }
+
+            showStatus('');
+            setLoading(true);
+
+            try {
+                const response = await fetch(BACKEND_URL + '/translate/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        input_str: text,
+                        source_language: sourceLang.value,
+                        target_language: targetLang.value
+                    })
+                });
+
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    const detail = Array.isArray(data.detail)
+                        ? data.detail.map(d => d.msg).join(' ')
+                        : data.detail;
+                    throw new Error(detail || 'The server returned status ' + response.status + '.');
+                }
+                setOutput(data.translated_text);
+            } catch (err) {
+                setOutput(PLACEHOLDER, true);
+                const offline = err instanceof TypeError;
+                showStatus(
+                    offline
+                        ? 'Could not reach the backend at ' + BACKEND_URL + '. Check that the server is running and CORS is enabled.'
+                        : 'Translation failed: ' + err.message,
+                    true
+                );
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        sourceLang.addEventListener('change', updateLabels);
+        targetLang.addEventListener('change', updateLabels);
+
+        swapBtn.addEventListener('click', () => {
+            const previousSource = sourceLang.value;
+            sourceLang.value = targetLang.value;
+            targetLang.value = previousSource;
+            // Move the current translation into the input so it can be translated back
+            if (!output.classList.contains('empty')) {
+                inputText.value = output.textContent;
+                inputText.dispatchEvent(new Event('input'));
+                setOutput(PLACEHOLDER, true);
+            }
+            updateLabels();
+            showStatus('');
+        });
+
+        inputText.addEventListener('input', () => {
+            const n = inputText.value.length;
+            charCount.textContent = n + (n === 1 ? ' character' : ' characters');
+        });
+
+        inputText.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') translate();
+        });
+
+        translateBtn.addEventListener('click', translate);
+
+        clearBtn.addEventListener('click', () => {
+            inputText.value = '';
+            charCount.textContent = '0 characters';
+            setOutput(PLACEHOLDER, true);
+            showStatus('');
+            inputText.focus();
+        });
+
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(output.textContent);
+                copyBtn.textContent = 'Copied';
+            } catch {
+                copyBtn.textContent = 'Copy failed';
+            }
+            setTimeout(() => (copyBtn.textContent = 'Copy'), 1500);
+        });
+    </script>
+</body>
+</html>
